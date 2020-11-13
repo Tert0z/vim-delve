@@ -99,9 +99,7 @@ endif
 "                              Implementation
 "-------------------------------------------------------------------------------
 " delve_instructions holds all the instructions to delve in a list.
-let s:delve_instructions = []
-" delve_instructions_signs holds instructions sign id
-let s:delve_instructions_signs = {}
+let s:delve_instructions = {}
 
 " Ensure that the cache path exists.
 if has('nvim')
@@ -118,54 +116,52 @@ autocmd VimLeave * call delve#removeInstructionsFile()
 exe "sign define delve_breakpoint text=". g:delve_breakpoint_sign ." texthl=". g:delve_breakpoint_sign_highlight
 exe "sign define delve_tracepoint text=". g:delve_tracepoint_sign ." texthl=". g:delve_tracepoint_sign_highlight
 
-" addSign adds sign with unique id
-function! delve#addSign(instruction, file, line, name)
-    let id = eval(max(s:delve_instructions_signs)+1)
-    let s:delve_instructions_signs[a:instruction] = id
-    exe "sign place ". id . s:sign_parameters ." line=". a:line ." name=". a:name ." file=". a:file
+" removeSign removes sign by instruction
+function! delve#removeSign() dict
+    exe "sign unplace ". self.sign_id . s:sign_parameters
 endfunction
 
-" removeSign removes sign by instruction
-function! delve#removeSign(instruction)
-    let id = remove(s:delve_instructions_signs, a:instruction)
-    exe "sign unplace ". id . s:sign_parameters
+let s:sign_id = 0
+" addSign adds sign with unique id
+function! delve#addSign(name) dict
+    let s:sign_id += 1
+    let self.sign_id = s:sign_id
+    exe "sign place ". self.sign_id . s:sign_parameters ." line=". self.line ." name=". a:name ." file=". self.file
+endfunction
+
+function! delve#newBreakpoint(type, file, line)
+    return {"type": a:type,
+                \ "sign_id": 0,
+                \ "file": a:file,
+                \ "line": a:line,
+                \ "addSign": function("delve#addSign"),
+                \ "removeSign": function("delve#removeSign")}
 endfunction
 
 " addBreakpoint adds a new breakpoint to the instructions and gutter. If a
-" tracepoint exists at the same location, it will be removed.
+" tracepoint exists at the same location, it will be replaced.
 function! delve#addBreakpoint(file, line)
-    let breakpoint = "break ". a:file .":". a:line
-    let tracepoint = "trace ". a:file .":". a:line
+    let key =  a:file .":". a:line
+    let breakpoint = delve#newBreakpoint("break", a:file, a:line)
+    call breakpoint.addSign("delve_breakpoint")
 
-    " Remove tracepoints if set on the same line.
-    if index(s:delve_instructions, tracepoint) != -1
-        call delve#removeTracepoint(a:file, a:line)
-    endif
-
-    call add(s:delve_instructions, breakpoint)
-    call delve#addSign(breakpoint, a:file, a:line, "delve_breakpoint")
+    let s:delve_instructions[key] = breakpoint
 endfunction
 
 " addTracepoint adds a new tracepoint to the instructions and gutter. If a
 " breakpoint exists at the same location, it will be removed.
 function! delve#addTracepoint(file, line)
-    let breakpoint = "break ". a:file .":". a:line
-    let tracepoint = "trace ". a:file .":". a:line
+    let key =  a:file .":". a:line
+    let breakpoint = delve#newBreakpoint("trace", a:file, a:line)
+    call breakpoint.addSign("delve_tracepoint")
 
-    " Remove breakpoint if set on the same line.
-    if index(s:delve_instructions, breakpoint) != -1
-        call delve#removeBreakpoint(a:file, a:line)
-    endif
-
-    call add(s:delve_instructions, tracepoint)
-
-    call delve#addSign(tracepoint, a:file, a:line, "delve_tracepoint")
+    let s:delve_instructions[key] = breakpoint
 endfunction
 
 " clearAll is removing all active breakpoints and tracepoints.
 function! delve#clearAll()
     for i in s:delve_instructions
-        call delve#removeSign(i)
+        call i.removeSign()
     endfor
 
     let s:delve_instructions = []
@@ -238,23 +234,16 @@ endfunction
 
 " removeTracepoint deletes a new tracepoint to the instructions and gutter.
 function! delve#removeTracepoint(file, line)
-    let tracepoint = "trace ". a:file .":". a:line
-
-    let i = index(s:delve_instructions, tracepoint)
-    if i != -1
-        call remove(s:delve_instructions, i)
-        call delve#removeSign(tracepoint)
-    endif
+    call delve#removeBreakpoint(a:file, a:line)
 endfunction
 
 " removeBreakpoint deletes a new breakpoint to the instructions and gutter.
 function! delve#removeBreakpoint(file, line)
-    let breakpoint = "break ". a:file .":". a:line
-
-    let i = index(s:delve_instructions, breakpoint)
-    if i != -1
-        call remove(s:delve_instructions, i)
-        call delve#removeSign(breakpoint)
+    let key = a:file .":". a:line
+    if has_key(s:delve_instructions, key)
+        let l:breakpoint = s:delve_instructions[key]
+        call l:breakpoint.removeSign()
+        call remove(s:delve_instructions, key)
     endif
 endfunction
 
@@ -351,11 +340,11 @@ endfunction
 
 " toggleBreakpoint is toggling breakpoints at the line under the cursor.
 function! delve#toggleBreakpoint(file, line)
-    let breakpoint = "break ". a:file .":". a:line
+    let key = a:file .":". a:line
 
     " Find the breakpoint in the instructions, if available. If it's already
     " there, remove it. If not, add it.
-    if index(s:delve_instructions, breakpoint) == -1
+    if has_key(s:delve_instructions, key) == -1
         call delve#addBreakpoint(a:file, a:line)
     else
         call delve#removeBreakpoint(a:file, a:line)
@@ -364,11 +353,11 @@ endfunction
 
 " toggleTracepoint is toggling tracepoints at the line under the cursor.
 function! delve#toggleTracepoint(file, line)
-    let tracepoint = "trace ". a:file .":". a:line
+    let key = "trace ". a:file .":". a:line
 
     " Find the tracepoint in the instructions, if available. If it's already
     " there, remove it. If not, add it.
-    if index(s:delve_instructions, tracepoint) == -1
+    if has_key(s:delve_instructions, key)
         call delve#addTracepoint(a:file, a:line)
     else
         call delve#removeTracepoint(a:file, a:line)
@@ -378,7 +367,11 @@ endfunction
 " writeInstructionsFile is persisting the instructions to the set file.
 function! delve#writeInstructionsFile()
     call delve#removeInstructionsFile()
-    call writefile(s:delve_instructions + ["continue"], g:delve_instructions_file)
+    let l:instructions = []
+    for [i, breakpoint] in items(s:delve_instructions)
+        call add(l:instructions, breakpoint.type." ".breakpoint.file.":".breakpoint.line)
+    endfor
+    call writefile(l:instructions + ["continue"], g:delve_instructions_file)
 endfunction
 
 function! delve#getInitInstructions()
