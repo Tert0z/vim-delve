@@ -148,6 +148,22 @@ function! delve#addBreakpoint(file, line)
     let s:delve_instructions[key] = breakpoint
 endfunction
 
+hi delveOnHiglight ctermbg=blue guibg=blue
+
+function! delve#addBreakpointOn(file, line, ...)
+    let l:on_cmd = (a:0 > 0) ? join(a:000) : ""
+    let l:key =  a:file .":". a:line
+
+    if !has_key(s:delve_instructions, key)
+        echoerr "There is no any breakpoint or tracepoint on current line"
+        return
+    endif
+
+    let s:delve_instructions[l:key].on_cmd = l:on_cmd
+    let id = nvim_buf_set_virtual_text(0, 0, a:line - 1, [[l:on_cmd, "delveOnHiglight"]], {})
+    let s:delve_instructions[l:key].on_cmd_highlight = id
+endfunction
+
 " addTracepoint adds a new tracepoint to the instructions and gutter. If a
 " breakpoint exists at the same location, it will be removed.
 function! delve#addTracepoint(file, line)
@@ -243,6 +259,9 @@ function! delve#removeBreakpoint(file, line)
     if has_key(s:delve_instructions, key)
         let l:breakpoint = s:delve_instructions[key]
         call l:breakpoint.removeSign()
+        if has_key(l:breakpoint,"on_cmd")
+            call nvim_buf_clear_namespace(0, l:breakpoint.on_cmd_highlight, 1, -1)
+        endif
         call remove(s:delve_instructions, key)
     endif
 endfunction
@@ -344,7 +363,7 @@ function! delve#toggleBreakpoint(file, line)
 
     " Find the breakpoint in the instructions, if available. If it's already
     " there, remove it. If not, add it.
-    if has_key(s:delve_instructions, key) == -1
+    if !has_key(s:delve_instructions, key)
         call delve#addBreakpoint(a:file, a:line)
     else
         call delve#removeBreakpoint(a:file, a:line)
@@ -353,11 +372,11 @@ endfunction
 
 " toggleTracepoint is toggling tracepoints at the line under the cursor.
 function! delve#toggleTracepoint(file, line)
-    let key = "trace ". a:file .":". a:line
+    let key = a:file .":". a:line
 
     " Find the tracepoint in the instructions, if available. If it's already
     " there, remove it. If not, add it.
-    if has_key(s:delve_instructions, key)
+    if !has_key(s:delve_instructions, key)
         call delve#addTracepoint(a:file, a:line)
     else
         call delve#removeTracepoint(a:file, a:line)
@@ -368,8 +387,13 @@ endfunction
 function! delve#writeInstructionsFile()
     call delve#removeInstructionsFile()
     let l:instructions = []
+    let idx = 0
     for [i, breakpoint] in items(s:delve_instructions)
+        let idx += 1
         call add(l:instructions, breakpoint.type." ".breakpoint.file.":".breakpoint.line)
+        if has_key(breakpoint, "on_cmd")
+            call add(l:instructions, "on ".idx." ".breakpoint.on_cmd)
+        endif
     endfor
     call writefile(l:instructions + ["continue"], g:delve_instructions_file)
 endfunction
@@ -395,3 +419,4 @@ command! -nargs=* DlvTest call delve#dlvTest(expand('%:p:h'), <f-args>)
 command! -nargs=0 DlvToggleBreakpoint call delve#toggleBreakpoint(delve#getFile(), line('.'))
 command! -nargs=0 DlvToggleTracepoint call delve#toggleTracepoint(delve#getFile(), line('.'))
 command! -nargs=0 DlvVersion call delve#dlvVersion()
+command! -nargs=* DlvAddOn call delve#addBreakpointOn(delve#getFile(), line('.'), <f-args>)
